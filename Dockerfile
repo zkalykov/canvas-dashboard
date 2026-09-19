@@ -11,9 +11,6 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-# The landing page is static, so the token-login button is decided at build time.
-ARG MANUAL_MODE=0
-ENV MANUAL_MODE=$MANUAL_MODE
 RUN npm run build
 
 FROM node:24-alpine AS runner

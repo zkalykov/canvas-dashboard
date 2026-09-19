@@ -8,7 +8,7 @@ Student dashboard for Canvas LMS. Next.js 16 App Router, React 19, TypeScript, T
 npm run dev     # local dev on :3000
 npm run build   # production build (also the type check; there are no tests)
 npm run lint    # eslint (older files still have `any` errors; keep new code clean)
-docker compose up --build   # production container (reads .env; MANUAL_MODE is a build arg)
+docker compose up --build   # production container (reads .env)
 ```
 
 Local dev: set `DEV_MODE=1` with `CANVAS_BASE_URL` / `CANVAS_API_TOKEN` in `.env` to skip login (dev server only), or `MANUAL_MODE=1` to log in with a token. All settings are in `.env.example` and read in `src/lib/app-config.ts`.
@@ -40,7 +40,7 @@ page (src/app/**/page.tsx)
 - The all-assignments load fills the per-course lists and single assignments too (`loadAllAssignments`), and `useUpcomingAssignments` is derived from it (no second download).
 - The app draws without waiting for `/api/auth/session`: the readable `canvas_signed_in` cookie (`{access, url}`, no secrets, same lifetime as the session) says someone is signed in; the server check follows in the background.
 - SEO: `src/lib/site.ts` holds the title, description, GitHub link and `siteUrl()` (SITE_URL, else Vercel's production domain). Only `/home` is indexed (root layout says noindex, the home page overrides it); `src/app/robots.ts`, `src/app/sitemap.ts` and `src/app/opengraph-image.png` (link preview) sit next to it.
-- `/home` is a static page and looks the same for everyone on every refresh. Signed in, its login buttons open the dashboard. The demo loads in the browser behind a skeleton (`DemoSkeleton`); `MANUAL_MODE` reaches it as a prop from the server page.
+- `/home` looks the same for everyone on every refresh. It is rendered per request (`dynamic = 'force-dynamic'`) only so `MANUAL_MODE` can change without a rebuild; it reaches the page as a prop from the server page. Signed in, its login buttons open the dashboard. The demo loads in the browser behind a skeleton (`DemoSkeleton`).
 
 ## Canvas API rules that bit us
 
@@ -61,7 +61,7 @@ page (src/app/**/page.tsx)
 - The landing page is `/home` (`src/components/auth/landing-page.tsx`): login on top, a clickable demo dashboard below (sample data in `src/components/auth/demo/`, never Canvas). Logged-out visitors on any app page are sent there by `MainLayout`; public pages are `/home`, `/login`, `/auth/*`. The "Canvas" wordmark in the sidebar and phone header links to `/home`.
 - Telegram login with approval: the bot's `/portal` sends `/auth/<code>`, which shows the landing page with `LinkApprovalDialog` popped up. The dialog calls `POST /api/auth/link/start`, and the portal (`PORTAL_URL`, `POST /api/portal/login/request`) uses up the code and sends Approve/Deny buttons in Telegram. The dialog polls `GET /api/auth/link/status` (portal `POST /api/portal/login/status`, secret poll token kept in an httpOnly cookie); only after Approve does the portal return the Canvas credentials, once, and the session starts. Portal code: `login_approval.py` in the canvas.sonungo.com repo.
 - Web sessions: after approval the portal creates a session (`web_sessions.py` in the portal repo) and returns its id and secret; they live in the session cookie (`sid`, `ssec`). `lookupCanvasSession()` (and `requireCanvasSession()` for API routes) asks the portal whether it is still active (`src/lib/portal-session.ts`, `POST /api/portal/session/check`, cached 60 s per server, a recent "active" is trusted for 10 minutes if the portal is down). Logged out in Telegram (`/sessions`) or idle means 401 and the cookies are removed; portal unreachable means 503 and nobody is logged out; the client re-checks after any 401 (`canvas:unauthorized` event) and on every page change, then goes to `/home`. Website logout calls `POST /api/portal/session/end`. Every portal call sends `portalHeaders()` (`src/lib/app-config.ts`): with `PORTAL_API_KEY` set on both sides, the portal only answers this server.
-- Access levels: Telegram offers View only (recommended), Full access or Deny. The session cookie stores `access`; `lookupCanvasSession()` returns it, and the Canvas proxy and upload route answer 403 to any write in a view-only session. The client reads `useAuth().isViewOnly` to hide write controls (`ViewOnlyNote`, `ViewOnlyBanner`). Manual token login and DEV_MODE are full access.
+- Access levels: Telegram offers View only (recommended), Full access or Deny. The session cookie stores `access`; `lookupCanvasSession()` returns it, and the Canvas proxy and upload route answer 403 to any write in a view-only session. The client reads `useAuth().isViewOnly` to hide write controls (`ViewOnlyNote` where a submit form would be; there is no page-wide banner). Manual token login and DEV_MODE are full access.
 - The approval message includes device (`src/lib/device.ts`), location and IP (`src/lib/request-location.ts`; hosting headers or ipapi.co, `LOCATION_LOOKUP=0` to disable).
 - Token login: with `MANUAL_MODE=1`, "Login via Canvas token" opens `token-login-dialog.tsx` -> `/api/auth/login` (public https hosts or `ALLOWED_CANVAS_HOSTS`, checked with `/users/self`).
 - The session cookie `portal_session` is AES-256-GCM encrypted (`src/lib/session.ts`, key = SHA-256 of `SESSION_SECRET`) and holds `{ canvas_url, canvas_token, user_id, access, sid, ssec }`. The token never reaches the browser.
@@ -95,6 +95,6 @@ page (src/app/**/page.tsx)
 - Look: Link-style light theme and shotscreen's dark theme. Grey frame (`bg-shell`), each page in a bordered panel, sidebar with six main links plus courses. Colors are tokens in `globals.css`.
 - Pick-one lists inside a page (courses on Grades and Files) use `SideList` / `SideListItem` from `src/components/shared/side-list.tsx`, styled like the sidebar.
 - Phones: every responsive grid needs a base `grid-cols-1` and `minmax(0,1fr)` instead of `1fr`, or a long line of text widens the column past the screen (the page panel clips it). Check pages at 390px wide.
-- README screenshots (`docs/screenshots/`) use sample data only, never a real Canvas account: the landing page's demo, and for app screens (like `download-course.png`) a browser whose `/api/canvas/*` requests are all answered with made-up data. Build with `MANUAL_MODE=0` before taking them.
+- README screenshots (`docs/screenshots/`) use sample data only, never a real Canvas account: the landing page's demo, and for app screens (like `download-course.png`) a browser whose `/api/canvas/*` requests are all answered with made-up data. Run the server with `MANUAL_MODE=0` before taking them.
 - Icons: Phosphor only (`@phosphor-icons/react`, the `…Icon` names, e.g. `CaretRightIcon`). Regular weight; `weight="fill"` marks the active sidebar item. Use icons for navigation and list tiles, not in titles or badges.
 - `src/components/ui/*` is generated shadcn/ui; add components with the shadcn CLI rather than hand-editing.

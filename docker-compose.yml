@@ -2,9 +2,6 @@ services:
   canvas-dashboard:
     build:
       context: .
-      args:
-        # Read when the landing page is built (see Dockerfile).
-        MANUAL_MODE: ${MANUAL_MODE:-0}
     ports:
       - "3000:3000"
     env_file:

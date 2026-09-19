@@ -121,7 +121,14 @@ export function LinkApprovalDialog({ code, onClose }: { code: string; onClose: (
 
   return (
     <Dialog open onOpenChange={open => !open && onClose()}>
-      <DialogContent className="gap-5 rounded-2xl p-6 sm:max-w-md" showCloseButton={phase !== 'approved'}>
+      {/* Stays open until approved (then the page redirects) or closed with the X:
+          clicks outside and the Escape key don't dismiss it. */}
+      <DialogContent
+        className="gap-5 rounded-2xl p-6 sm:max-w-md"
+        showCloseButton={phase !== 'approved'}
+        onInteractOutside={event => event.preventDefault()}
+        onEscapeKeyDown={event => event.preventDefault()}
+      >
         <ApprovalCard
           phase={phase}
           access={access}

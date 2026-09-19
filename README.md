@@ -96,7 +96,7 @@ All settings go in `.env`. `.env.example` explains each one.
 | Setting | Needed | What it does |
 | --- | --- | --- |
 | `SESSION_SECRET` | In production | Encrypts the login cookie. Create one with `openssl rand -hex 32`. |
-| `MANUAL_MODE` | No | `1` adds "Login via Canvas token" to the landing page. Read when the site is built, so rebuild after changing it. |
+| `MANUAL_MODE` | No | `1` adds "Login via Canvas token" to the landing page. |
 | `ALLOWED_CANVAS_HOSTS` | No | Comma-separated Canvas sites allowed for token login. Empty allows any public https Canvas site. |
 | `PORTAL_URL` | No | The Telegram bot's backend. Default: `https://canvas.sonungo.com`. |
 | `PORTAL_API_KEY` | Recommended | A shared secret with the bot's backend, so only this site can request logins. Set the same value on both; set it here first. |

@@ -6,7 +6,6 @@ import { useAuth } from '@/lib/auth-context';
 import { SidebarProvider } from './sidebar-context';
 import { Sidebar } from './sidebar';
 import { Header } from './header';
-import { ViewOnlyBanner } from './view-only-banner';
 import { Preloader } from './preloader';
 
 interface MainLayoutProps {
@@ -52,7 +51,6 @@ export function MainLayout({ children }: MainLayoutProps) {
         <div className="min-w-0 p-2 md:pl-[260px]">
           <div className="min-h-[calc(100vh-1rem)] min-w-0 overflow-hidden rounded-xl border border-shell-line bg-background">
             <Header />
-            <ViewOnlyBanner />
             <main className="mx-auto min-w-0 max-w-[1040px] px-5 py-7 md:px-8 md:py-10">{children}</main>
           </div>
         </div>
