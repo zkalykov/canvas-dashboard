@@ -1,41 +1,30 @@
 'use client';
 
-import { useDiscussions, useCourses } from '@/hooks/use-canvas';
+import { useDiscussions, useCourses, useCourseColors } from '@/hooks/use-canvas';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { MessageSquare, MessageCircle } from 'lucide-react';
+import { ChatCircleIcon } from '@phosphor-icons/react';
 import { formatDistanceToNow } from 'date-fns';
 import Link from 'next/link';
+import { courseTitle } from '@/lib/course-name';
 
 export function DiscussionsPage() {
   const { data: discussions, loading, error } = useDiscussions();
   const { data: courses } = useCourses();
+  const { getColor } = useCourseColors();
 
   const getCourseName = (courseId: number) => {
-    return courses?.find(c => c.id === courseId)?.course_code || 'Unknown';
-  };
-
-  const getCourseColor = (courseId: number) => {
-    const colors = [
-      'bg-red-500',
-      'bg-blue-500',
-      'bg-green-500',
-      'bg-yellow-500',
-      'bg-purple-500',
-      'bg-pink-500',
-      'bg-indigo-500',
-      'bg-orange-500',
-    ];
-    return colors[courseId % colors.length];
+    const course = courses?.find(c => c.id === courseId);
+    return course ? courseTitle(course) : 'Course';
   };
 
   if (loading) {
     return (
       <div className="space-y-6">
-        <h1 className="text-2xl font-bold">Discussions</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Discussions</h1>
         <div className="space-y-4">
           {[1, 2, 3, 4, 5].map(i => (
             <Skeleton key={i} className="h-24" />
@@ -48,7 +37,7 @@ export function DiscussionsPage() {
   if (error) {
     return (
       <div className="space-y-6">
-        <h1 className="text-2xl font-bold">Discussions</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Discussions</h1>
         <p className="text-muted-foreground">Failed to load discussions</p>
       </div>
     );
@@ -56,8 +45,7 @@ export function DiscussionsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold flex items-center gap-2">
-        <MessageSquare className="h-6 w-6" />
+      <h1 className="text-xl font-semibold flex items-center gap-2 tracking-tight">
         Discussions
       </h1>
 
@@ -84,7 +72,7 @@ export function DiscussionsPage() {
 
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
-                          <span className={`h-2 w-2 rounded-full ${getCourseColor(discussion.course_id)}`} />
+                          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: getColor(discussion.course_id) }} />
                           <span className="text-xs text-muted-foreground">
                             {getCourseName(discussion.course_id)}
                           </span>
@@ -101,7 +89,7 @@ export function DiscussionsPage() {
 
                         <div className="flex items-center gap-3 text-sm text-muted-foreground">
                           <span className="flex items-center gap-1">
-                            <MessageCircle className="h-3 w-3" />
+                            <ChatCircleIcon className="h-3 w-3" />
                             {discussion.discussion_subentry_count} replies
                           </span>
                           {discussion.unread_count > 0 && (

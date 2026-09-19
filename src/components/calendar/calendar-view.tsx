@@ -1,18 +1,15 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { useCalendar, useCourses } from '@/hooks/use-canvas';
+import Link from 'next/link';
+import { useCalendar, useCourses, useCourseColors } from '@/hooks/use-canvas';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import {
-  Calendar as CalendarIcon,
-  ChevronLeft,
-  ChevronRight,
-  ExternalLink,
-} from 'lucide-react';
+import type { CalendarEvent } from '@/lib/types';
+import { ArrowSquareOutIcon, CaretLeftIcon, CaretRightIcon } from '@phosphor-icons/react';
 import {
   format,
   startOfMonth,
@@ -26,6 +23,7 @@ import {
   isSameDay,
   isToday,
 } from 'date-fns';
+import { courseTitle } from '@/lib/course-name';
 
 export function CalendarView() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -37,24 +35,32 @@ export function CalendarView() {
   const { data: events, loading, error } = useCalendar(startDate, endDate);
   const { data: courses } = useCourses();
 
-  const getCourseColor = (contextCode: string) => {
-    const courseId = parseInt(contextCode.replace('course_', ''));
-    const colors = [
-      'bg-red-500',
-      'bg-blue-500',
-      'bg-green-500',
-      'bg-yellow-500',
-      'bg-purple-500',
-      'bg-pink-500',
-      'bg-indigo-500',
-      'bg-orange-500',
-    ];
-    return colors[courseId % colors.length];
+  const { getColor } = useCourseColors();
+
+  const courseIdFromContext = (contextCode: string) => {
+    const match = contextCode.match(/^course_(\d+)$/);
+    return match ? Number(match[1]) : null;
+  };
+
+  // Personal (user_*) events have no course; show them in a neutral color.
+  const getEventColor = (contextCode: string) => {
+    const courseId = courseIdFromContext(contextCode);
+    return courseId ? getColor(courseId) : '#64748b';
   };
 
   const getCourseName = (contextCode: string) => {
-    const courseId = parseInt(contextCode.replace('course_', ''));
-    return courses?.find(c => c.id === courseId)?.course_code || contextCode;
+    const courseId = courseIdFromContext(contextCode);
+    if (!courseId) return 'Personal';
+    const course = courses?.find(c => c.id === courseId);
+    return course ? courseTitle(course) : contextCode;
+  };
+
+  const eventHref = (event: CalendarEvent) => {
+    const courseId = courseIdFromContext(event.context_code);
+    if (event.type === 'assignment' && event.assignment && courseId) {
+      return `/courses/${courseId}/assignments/${event.assignment.id}`;
+    }
+    return null;
   };
 
   const calendarDays = useMemo(() => {
@@ -80,12 +86,11 @@ export function CalendarView() {
   const selectedDateEvents = selectedDate ? getEventsForDate(selectedDate) : [];
 
   return (
-    <div className="grid gap-6 lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
       {/* Calendar Grid */}
       <Card className="lg:col-span-2">
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="flex items-center gap-2">
-            <CalendarIcon className="h-5 w-5" />
             {format(currentMonth, 'MMMM yyyy')}
           </CardTitle>
           <div className="flex items-center gap-2">
@@ -94,7 +99,7 @@ export function CalendarView() {
               size="icon"
               onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}
             >
-              <ChevronLeft className="h-4 w-4" />
+              <CaretLeftIcon className="h-4 w-4" />
             </Button>
             <Button
               variant="outline"
@@ -111,13 +116,15 @@ export function CalendarView() {
               size="icon"
               onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}
             >
-              <ChevronRight className="h-4 w-4" />
+              <CaretRightIcon className="h-4 w-4" />
             </Button>
           </div>
         </CardHeader>
         <CardContent>
           {loading ? (
             <Skeleton className="h-96 w-full" />
+          ) : error ? (
+            <p className="py-16 text-center text-sm text-muted-foreground">Couldn&apos;t load your calendar. Try reloading the page.</p>
           ) : (
             <div className="grid grid-cols-7 gap-px bg-muted rounded-lg overflow-hidden">
               {/* Day headers */}
@@ -158,10 +165,8 @@ export function CalendarView() {
                       {dayEvents.slice(0, 3).map((event, i) => (
                         <div
                           key={i}
-                          className={`
-                            flex items-center gap-1 rounded px-1 text-xs truncate
-                            ${getCourseColor(event.context_code)} text-white
-                          `}
+                          className="flex items-center gap-1 rounded px-1 text-xs truncate text-white"
+                          style={{ backgroundColor: getEventColor(event.context_code) }}
                         >
                           {event.type === 'assignment' ? '📝' : '📅'}
                           <span className="truncate">{event.title}</span>
@@ -194,19 +199,16 @@ export function CalendarView() {
               <p className="text-sm text-muted-foreground">No events on this day</p>
             ) : (
               <div className="space-y-3">
-                {selectedDateEvents.map(event => (
-                  <a
-                    key={event.id}
-                    href={event.html_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block rounded-lg border p-3 transition-colors hover:bg-muted"
-                  >
+                {selectedDateEvents.map(event => {
+                  const inAppHref = eventHref(event);
+                  const content = (
+                    <>
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           <span
-                            className={`h-2 w-2 rounded-full ${getCourseColor(event.context_code)}`}
+                            className="h-2 w-2 rounded-full"
+                            style={{ backgroundColor: getEventColor(event.context_code) }}
                           />
                           <span className="text-xs text-muted-foreground">
                             {getCourseName(event.context_code)}
@@ -220,10 +222,27 @@ export function CalendarView() {
                           {event.type === 'assignment' ? 'Assignment' : 'Event'}
                         </Badge>
                       </div>
-                      <ExternalLink className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                      {!inAppHref && <ArrowSquareOutIcon className="h-3 w-3 text-muted-foreground flex-shrink-0" />}
                     </div>
-                  </a>
-                ))}
+                    </>
+                  );
+                  const className = 'block rounded-lg border p-3 transition-colors hover:bg-muted';
+                  return inAppHref ? (
+                    <Link key={`${event.type}-${event.id}`} href={inAppHref} className={className}>
+                      {content}
+                    </Link>
+                  ) : (
+                    <a
+                      key={`${event.type}-${event.id}`}
+                      href={event.html_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={className}
+                    >
+                      {content}
+                    </a>
+                  );
+                })}
               </div>
             )}
           </ScrollArea>

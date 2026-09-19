@@ -1,158 +1,297 @@
 'use client';
 
+import { useCallback } from 'react';
+import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { useAssignment, useCourses } from '@/hooks/use-canvas';
+import { format, formatDistanceToNow } from 'date-fns';
+import { ArrowCounterClockwiseIcon, ArrowLeftIcon, ArrowSquareOutIcon, CalendarBlankIcon, CalendarDotsIcon, ChatTextIcon, FileTextIcon, LockSimpleIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { useAssignment, useCourseColors, useCourseName, useMySubmission } from '@/hooks/use-canvas';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { CanvasHtml } from '@/components/shared/canvas-html';
 import { AssignmentSubmission } from '@/components/assignments/assignment-submission';
+import { AssignmentStatusCard } from '@/components/assignments/assignment-status-card';
+import { AssignmentRubric } from '@/components/assignments/assignment-rubric';
+import { MySubmission, submissionAttempts } from '@/components/assignments/my-submission';
+import { SubmissionComments } from '@/components/assignments/submission-comments';
+import { canvasErrorMessage } from '@/components/assignments/assignment-utils';
 import { QuizEngine } from '@/components/quizzes/quiz-engine';
-import {
-  FileText,
-  ExternalLink,
-  Calendar,
-  ArrowLeft,
-} from 'lucide-react';
-import { format } from 'date-fns';
+import { CanvasApiError } from '@/lib/canvas-api';
+import type { Assignment } from '@/lib/types';
+
+const ONLINE_TYPES = ['online_text_entry', 'online_url', 'online_upload'];
+
+/** Canvas includes `discussion_topic` on graded-discussion assignments. */
+type AssignmentWithDiscussion = Assignment & { discussion_topic?: { id: number } | null };
+
+function BackButton() {
+  const router = useRouter();
+  return (
+    <Button variant="ghost" onClick={() => router.back()} className="-ml-3">
+      <ArrowLeftIcon className="h-4 w-4" /> Back
+    </Button>
+  );
+}
+
+function SubmitElsewhere({ assignment }: { assignment: AssignmentWithDiscussion }) {
+  const types = assignment.submission_types ?? [];
+  const discussionId = assignment.discussion_topic?.id;
+
+  if (types.includes('discussion_topic')) {
+    return (
+      <Card className="py-5">
+        <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3 text-sm">
+            <ChatTextIcon className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+            <div>
+              <p className="font-medium">Graded discussion</p>
+              <p className="text-muted-foreground">You submit this by posting a reply in the discussion.</p>
+            </div>
+          </div>
+          {discussionId ? (
+            <Button asChild className="shrink-0">
+              <Link href={`/courses/${assignment.course_id}/discussions/${discussionId}`}>Go to discussion</Link>
+            </Button>
+          ) : (
+            <Button asChild variant="outline" className="shrink-0">
+              <a href={assignment.html_url} target="_blank" rel="noopener noreferrer">
+                <ArrowSquareOutIcon className="h-4 w-4" /> Open in Canvas
+              </a>
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (types.some(t => ['media_recording', 'student_annotation'].includes(t))) {
+    return (
+      <Card className="py-5">
+        <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3 text-sm">
+            <ArrowSquareOutIcon className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+            <div>
+              <p className="font-medium">Submit this in Canvas</p>
+              <p className="text-muted-foreground">
+                {types.includes('media_recording') ? 'Media recordings' : 'Annotated documents'} can only be submitted
+                on the Canvas website.
+              </p>
+            </div>
+          </div>
+          <Button asChild className="shrink-0">
+            <a href={assignment.html_url} target="_blank" rel="noopener noreferrer">
+              <ArrowSquareOutIcon className="h-4 w-4" /> Open in Canvas
+            </a>
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const message = types.includes('on_paper')
+    ? 'Turn this assignment in on paper, as your instructor directs.'
+    : types.includes('not_graded')
+      ? 'This assignment is not graded and needs no submission.'
+      : 'This assignment does not take an online submission.';
+  return <div className="rounded-xl border bg-muted/40 p-6 text-center text-sm text-muted-foreground">{message}</div>;
+}
+
+function ExternalToolCard({ assignment }: { assignment: Assignment }) {
+  const isQuiz = !!assignment.is_quiz_assignment;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          {isQuiz ? 'This quiz opens in Canvas' : 'This assignment opens in Canvas'}
+        </CardTitle>
+        <CardDescription>
+          {isQuiz
+            ? 'It uses Canvas New Quizzes, which can only be taken on the Canvas website. Your status and grade still show up here.'
+            : 'It uses an external tool that runs inside Canvas. Your status and grade still show up here once you finish.'}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Button asChild>
+          <a href={assignment.html_url} target="_blank" rel="noopener noreferrer">
+            <ArrowSquareOutIcon className="h-4 w-4" /> {isQuiz ? 'Take quiz in Canvas' : 'Open in Canvas'}
+          </a>
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function AssignmentDetailPage() {
-  const params = useParams();
-  const router = useRouter();
-  
-  const courseId = parseInt(params.courseId as string, 10);
-  const assignmentId = parseInt(params.assignmentId as string, 10);
+  const params = useParams<{ courseId: string; assignmentId: string }>();
+  const courseId = Number.parseInt(params.courseId, 10);
+  const assignmentId = Number.parseInt(params.assignmentId, 10);
 
-  const { data: assignment, loading, error } = useAssignment(courseId, assignmentId);
-  const { data: courses } = useCourses();
+  const { data: assignment, loading, error, refetch: refetchAssignment } = useAssignment(courseId, assignmentId);
+  const {
+    data: mySubmission,
+    loading: submissionLoading,
+    refetch: refetchSubmission,
+  } = useMySubmission(courseId, assignmentId);
+  const { getColor } = useCourseColors();
+  const courseName = useCourseName();
 
-  const getCourseName = (id: number) => {
-    return courses?.find(c => c.id === id)?.course_code || 'Unknown Course';
-  };
-
-  const getCourseColor = (id: number) => {
-    const colors = [
-      'bg-red-500', 'bg-blue-500', 'bg-green-500', 'bg-yellow-500',
-      'bg-purple-500', 'bg-pink-500', 'bg-indigo-500', 'bg-orange-500',
-    ];
-    return colors[id % colors.length];
-  };
+  const refreshAll = useCallback(
+    () => Promise.all([refetchAssignment(), refetchSubmission()]),
+    [refetchAssignment, refetchSubmission]
+  );
 
   if (loading) {
     return (
-      <div className="space-y-6 max-w-5xl mx-auto">
-        <Button variant="ghost" onClick={() => router.back()} className="mb-4">
-          <ArrowLeft className="mr-2 h-4 w-4" /> Back
-        </Button>
-        <div className="space-y-4">
-          <Skeleton className="h-8 w-1/2" />
-          <Skeleton className="h-4 w-1/4" />
-          <div className="pt-8 space-y-2">
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-3/4" />
-          </div>
+      <div className="mx-auto max-w-5xl space-y-6">
+        <BackButton />
+        <div className="space-y-3">
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-9 w-2/3" />
+          <Skeleton className="h-4 w-1/3" />
+        </div>
+        <Skeleton className="h-28 w-full rounded-xl" />
+        <div className="space-y-2">
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-3/4" />
         </div>
       </div>
     );
   }
 
   if (error || !assignment) {
+    const notFound = error instanceof CanvasApiError && (error.status === 404 || error.status === 403);
     return (
-      <div className="space-y-6 mx-auto max-w-5xl">
-        <Button variant="ghost" onClick={() => router.back()} className="mb-4">
-          <ArrowLeft className="mr-2 h-4 w-4" /> Back
-        </Button>
-        <div className="text-center py-20">
-          <FileText className="h-10 w-10 text-muted-foreground mx-auto mb-4" />
-          <h2 className="text-xl font-semibold">Assignment Not Found</h2>
-          <p className="text-muted-foreground mt-2">We couldn't load this assignment.</p>
+      <div className="mx-auto max-w-5xl space-y-6">
+        <BackButton />
+        <div className="flex flex-col items-center py-20 text-center">
+          <FileTextIcon className="mb-4 h-10 w-10 text-muted-foreground" />
+          <h2 className="text-xl font-semibold">{notFound ? 'Assignment not found' : "Couldn't load this assignment"}</h2>
+          <p className="mt-2 max-w-md text-muted-foreground">
+            {notFound
+              ? "It may have been removed, or you don't have access to it."
+              : canvasErrorMessage(error, 'Something went wrong while talking to Canvas.')}
+          </p>
+          {!notFound && (
+            <Button variant="outline" className="mt-6" onClick={() => void refetchAssignment()}>
+              <ArrowCounterClockwiseIcon className="h-4 w-4" /> Try again
+            </Button>
+          )}
         </div>
       </div>
     );
   }
 
+  const types = assignment.submission_types ?? [];
+  const submission = mySubmission ?? assignment.submission ?? null;
+  const quizId = types.includes('online_quiz') ? assignment.quiz_id : undefined;
+  const isClassicQuiz = !!quizId;
+  const isExternalTool = types.includes('external_tool');
+  const acceptsOnline = types.some(t => ONLINE_TYPES.includes(t));
+  const attempts = submissionAttempts(mySubmission);
+  const color = getColor(assignment.course_id);
+  const unlockAt = assignment.unlock_at ? new Date(assignment.unlock_at) : null;
+  const lockAt = assignment.lock_at ? new Date(assignment.lock_at) : null;
+
   return (
-    <div className="max-w-5xl mx-auto space-y-8 pb-10">
-      <Button variant="ghost" onClick={() => router.back()} className="-ml-4 mb-2">
-        <ArrowLeft className="mr-2 h-4 w-4" /> Back
-      </Button>
+    <div className="mx-auto max-w-5xl space-y-6 pb-10">
+      <BackButton />
 
-      <div className="space-y-4">
-        <div className="flex items-center gap-2 mb-2">
-          <span className={`h-2.5 w-2.5 rounded-full ${getCourseColor(assignment.course_id)}`} />
-          <span className="text-sm font-medium text-muted-foreground">
-            {getCourseName(assignment.course_id)}
-          </span>
-        </div>
-        
-        <h1 className="text-3xl font-bold">{assignment.name}</h1>
+      {/* Header */}
+      <header className="space-y-3">
+        <Link
+          href={`/courses/${assignment.course_id}`}
+          className="flex w-fit items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+        >
+          <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+          <span className="truncate">{courseName(assignment.course_id)}</span>
+        </Link>
 
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-3 text-sm pt-2">
-          {assignment.due_at && (
-            <div className="flex items-center gap-2">
-              <Calendar className="h-4 w-4 text-muted-foreground" />
+        <h1 className="text-xl font-semibold break-words sm:text-2xl tracking-tight">{assignment.name}</h1>
+
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+          {assignment.due_at ? (
+            <span className="flex items-center gap-2">
+              <CalendarBlankIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
               <span>
-                <span className="text-muted-foreground mr-1">Due:</span>
-                {format(new Date(assignment.due_at), 'EEEE, MMMM d, yyyy h:mm a')}
+                <span className="mr-1 text-muted-foreground">Due</span>
+                {format(new Date(assignment.due_at), 'EEE, MMM d, yyyy h:mm a')}
+                <span className="ml-1 text-muted-foreground">
+                  ({formatDistanceToNow(new Date(assignment.due_at), { addSuffix: true })})
+                </span>
               </span>
-            </div>
+            </span>
+          ) : (
+            <span className="flex items-center gap-2 text-muted-foreground">
+              <CalendarBlankIcon className="h-4 w-4 shrink-0" /> No due date
+            </span>
           )}
 
-          {assignment.points_possible !== undefined && assignment.points_possible !== null && (
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">
-                {assignment.points_possible} pts possible
-              </Badge>
-              {assignment.submission?.score !== null &&
-               assignment.submission?.score !== undefined && (
-                <Badge variant="default" className="bg-green-600">
-                  Score: {assignment.submission.score} / {assignment.points_possible}
-                </Badge>
-              )}
-            </div>
+          {(unlockAt || lockAt) && (
+            <span className="flex items-center gap-2 text-muted-foreground">
+              <CalendarDotsIcon className="h-4 w-4 shrink-0" />
+              {unlockAt && `Available ${format(unlockAt, 'MMM d, h:mm a')}`}
+              {unlockAt && lockAt && ' – '}
+              {lockAt && `${unlockAt ? '' : 'Available until '}${format(lockAt, 'MMM d, h:mm a')}`}
+            </span>
           )}
-        </div>
-      </div>
 
-      {assignment.description && (
-        <div className="border-t pt-8 mt-8">
-          <h2 className="text-xl font-semibold mb-4">Description</h2>
-          <div
-            className="prose prose-sm md:prose-base dark:prose-invert max-w-none"
-            dangerouslySetInnerHTML={{ __html: assignment.description }}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            {assignment.points_possible !== undefined && assignment.points_possible !== null && (
+              <Badge variant="secondary">{assignment.points_possible} pts possible</Badge>
+            )}
+            {assignment.omit_from_final_grade && <Badge variant="outline">Doesn&apos;t count toward final grade</Badge>}
+          </div>
         </div>
-      )}
+      </header>
 
-      {assignment.rubric && assignment.rubric.length > 0 && (
-        <div className="border-t pt-8">
-          <h2 className="text-xl font-semibold mb-4">Rubric</h2>
-          <div className="space-y-3">
-            {assignment.rubric.map(criterion => (
-              <div key={criterion.id} className="rounded-xl border bg-card p-4 shadow-sm">
-                <div className="flex justify-between items-start gap-4 mb-2">
-                  <span className="font-semibold">{criterion.description}</span>
-                  <Badge variant="outline" className="shrink-0">{criterion.points} pts</Badge>
-                </div>
-                {criterion.long_description && (
-                  <p className="text-sm text-muted-foreground leading-relaxed">
-                    {criterion.long_description}
-                  </p>
-                )}
-              </div>
-            ))}
+      <AssignmentStatusCard assignment={assignment} submission={submission} loading={submissionLoading} />
+
+      {assignment.locked_for_user && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-900 dark:text-amber-200">
+          <LockSimpleIcon className="mt-0.5 h-5 w-5 shrink-0" />
+          <div className="min-w-0">
+            <p className="font-semibold">This assignment is locked</p>
+            {assignment.lock_explanation ? (
+              <CanvasHtml html={assignment.lock_explanation} className="mt-1" />
+            ) : (
+              <p className="mt-1">It isn&apos;t available to you right now.</p>
+            )}
           </div>
         </div>
       )}
 
-      <div className="border-t pt-8 space-y-6">
-        <div className="flex items-center justify-between flex-wrap gap-4">
-          <h2 className="text-xl font-semibold">Submission</h2>
-          
-          {assignment.submission_types && (
-            <div className="flex gap-2 flex-wrap">
-              {assignment.submission_types.map(type => (
-                <Badge key={type} variant="secondary" className="font-normal text-xs">
+      {assignment.description && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Instructions</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <CanvasHtml html={assignment.description} className="text-sm leading-relaxed sm:text-base" />
+          </CardContent>
+        </Card>
+      )}
+
+      {assignment.rubric && assignment.rubric.length > 0 && (
+        <AssignmentRubric rubric={assignment.rubric} assessment={mySubmission?.rubric_assessment} />
+      )}
+
+      {mySubmission && !isClassicQuiz && attempts.length > 0 && (
+        <MySubmission assignment={assignment} submission={mySubmission} />
+      )}
+
+      {/* How to submit */}
+      <section className="space-y-3" aria-labelledby="submit-heading">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 id="submit-heading" className="text-lg font-semibold">
+            {isClassicQuiz ? 'Quiz' : 'Submission'}
+          </h2>
+          {types.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {types.map(type => (
+                <Badge key={type} variant="outline" className="text-xs font-normal capitalize">
                   {type.replace(/_/g, ' ')}
                 </Badge>
               ))}
@@ -160,40 +299,42 @@ export default function AssignmentDetailPage() {
           )}
         </div>
 
-        {assignment.submission_types?.includes('online_quiz') && assignment.quiz_id ? (
-          <QuizEngine 
-            courseId={assignment.course_id} 
-            quiz={assignment as any}
-          />
-        ) : assignment.submission_types?.some(t => 
-          ['online_text_entry', 'online_url', 'online_upload'].includes(t)
-        ) ? (
-          <AssignmentSubmission 
-            assignment={assignment}
-            onSuccess={() => {
-              // Usually we'd invalidate or refetch here, but reloading data works too
-              window.location.reload();
-            }}
-          />
+        {quizId ? (
+          <QuizEngine courseId={courseId} quizId={quizId} onComplete={() => void refreshAll()} />
+        ) : isExternalTool ? (
+          <ExternalToolCard assignment={assignment} />
+        ) : acceptsOnline ? (
+          <AssignmentSubmission assignment={assignment} submission={submission} onSubmitted={refreshAll} />
         ) : (
-          <div className="p-6 bg-muted/50 rounded-xl text-center text-muted-foreground text-sm border">
-            This assignment does not require an online submission.
-          </div>
+          <SubmitElsewhere assignment={assignment} />
         )}
+      </section>
 
-        <div className="pt-6">
-          <Button asChild variant="outline" className="w-full sm:w-auto">
-            <a
-              href={assignment.html_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center justify-center"
-            >
-              <ExternalLink className="h-4 w-4 mr-2" />
-              View Original on Canvas
-            </a>
+      {mySubmission ? (
+        <SubmissionComments
+          courseId={courseId}
+          assignmentId={assignmentId}
+          comments={mySubmission.submission_comments ?? []}
+          showAttempts={attempts.length > 1}
+          onPosted={refetchSubmission}
+        />
+      ) : submissionLoading ? (
+        <Skeleton className="h-40 w-full rounded-xl" />
+      ) : (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <WarningCircleIcon className="h-4 w-4" /> Comments couldn&apos;t be loaded.
+          <Button variant="link" size="sm" className="h-auto p-0" onClick={() => void refetchSubmission()}>
+            Retry
           </Button>
         </div>
+      )}
+
+      <div className="pt-2">
+        <Button asChild variant="outline" className="w-full sm:w-auto">
+          <a href={assignment.html_url} target="_blank" rel="noopener noreferrer">
+            <ArrowSquareOutIcon className="h-4 w-4" /> View on Canvas
+          </a>
+        </Button>
       </div>
     </div>
   );

@@ -1,0 +1,1 @@
+Canvas Dashboard: "Canvas, made simple." landing page with a Login via Telegram button and a preview of the student dashboard

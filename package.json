@@ -1,7 +1,26 @@
 {
   "name": "canvas-dashboard-sonungo-com",
   "version": "0.1.0",
+  "description": "A simple, fast, open-source dashboard for Canvas LMS: assignments, grades, files and messages from every course, with Telegram login.",
+  "keywords": [
+    "canvas",
+    "canvas-lms",
+    "instructure",
+    "student-dashboard",
+    "nextjs",
+    "telegram-login"
+  ],
+  "homepage": "https://github.com/zkalykov/canvas-dashboard#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zkalykov/canvas-dashboard.git"
+  },
+  "bugs": "https://github.com/zkalykov/canvas-dashboard/issues",
+  "license": "MIT",
   "private": true,
+  "engines": {
+    "node": ">=20.9"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,15 +28,15 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
     "class-variance-authority": "^0.7.1",
+    "client-zip": "^2.5.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
-    "lucide-react": "^0.576.0",
     "next": "16.1.6",
     "next-themes": "^0.4.6",
     "radix-ui": "^1.4.3",
     "react": "19.2.3",
-    "react-day-picker": "^9.14.0",
     "react-dom": "19.2.3",
     "swr": "^2.4.1",
     "tailwind-merge": "^3.5.0"

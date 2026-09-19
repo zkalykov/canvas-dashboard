@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { endCanvasSession } from '@/lib/canvas-server';
 
+/** Logs out here and ends the session in Telegram's /sessions list too. */
 export async function POST() {
-  const cookieStore = await cookies();
-  cookieStore.delete('portal_session');
+  await endCanvasSession();
   return NextResponse.json({ success: true });
 }

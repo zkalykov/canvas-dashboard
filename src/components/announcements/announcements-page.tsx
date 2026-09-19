@@ -1,12 +1,13 @@
 'use client';
 
 import { useAnnouncements } from '@/hooks/use-canvas';
+import { CanvasHtml } from '@/components/shared/canvas-html';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Bell, ExternalLink } from 'lucide-react';
+import { ArrowSquareOutIcon } from '@phosphor-icons/react';
 import { format, formatDistanceToNow } from 'date-fns';
 
 export function AnnouncementsPage() {
@@ -15,7 +16,7 @@ export function AnnouncementsPage() {
   if (loading) {
     return (
       <div className="space-y-6">
-        <h1 className="text-2xl font-bold">Announcements</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Announcements</h1>
         <div className="space-y-4">
           {[1, 2, 3, 4, 5].map(i => (
             <Skeleton key={i} className="h-32" />
@@ -28,7 +29,7 @@ export function AnnouncementsPage() {
   if (error) {
     return (
       <div className="space-y-6">
-        <h1 className="text-2xl font-bold">Announcements</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Announcements</h1>
         <p className="text-muted-foreground">Failed to load announcements</p>
       </div>
     );
@@ -36,8 +37,7 @@ export function AnnouncementsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold flex items-center gap-2">
-        <Bell className="h-6 w-6" />
+      <h1 className="text-xl font-semibold flex items-center gap-2 tracking-tight">
         Announcements
       </h1>
 
@@ -82,10 +82,7 @@ export function AnnouncementsPage() {
 
                         <h3 className="text-xl font-bold mb-4">{announcement.title}</h3>
 
-                        <div
-                          className="prose prose-sm dark:prose-invert max-w-none text-base"
-                          dangerouslySetInnerHTML={{ __html: announcement.message }}
-                        />
+                        <CanvasHtml html={announcement.message} className="text-base" />
                         
                         <div className="mt-4 pt-4 border-t flex justify-end">
                             <a 
@@ -94,7 +91,7 @@ export function AnnouncementsPage() {
                                 rel="noopener noreferrer"
                                 className="text-sm text-primary flex items-center gap-1 hover:underline"
                             >
-                                View original on Canvas <ExternalLink className="w-3 h-3" />
+                                View original on Canvas <ArrowSquareOutIcon className="w-3 h-3" />
                             </a>
                         </div>
                       </div>

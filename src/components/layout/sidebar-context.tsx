@@ -16,16 +16,13 @@ const SidebarContext = createContext<SidebarContextType>({
 });
 
 export function SidebarProvider({ children }: { children: React.ReactNode }) {
-  const [isOpen, setIsOpen] = useState(false);
   const pathname = usePathname();
+  // Remember which page the menu was opened on; navigating anywhere else closes it.
+  const [openOn, setOpenOn] = useState<string | null>(null);
+  const isOpen = openOn === pathname;
 
-  const toggle = useCallback(() => setIsOpen((prev) => !prev), []);
-  const close = useCallback(() => setIsOpen(false), []);
-
-  // Close sidebar on route change (mobile navigation)
-  useEffect(() => {
-    close();
-  }, [pathname, close]);
+  const toggle = useCallback(() => setOpenOn(prev => (prev === pathname ? null : pathname)), [pathname]);
+  const close = useCallback(() => setOpenOn(null), []);
 
   // Close sidebar on escape key
   useEffect(() => {

@@ -1,222 +1,397 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { canvasApi } from '@/lib/canvas-api';
-import type { Quiz, QuizSubmission, QuizQuestion } from '@/lib/types';
+import { useState, type FormEvent, type ReactNode } from 'react';
+import useSWR from 'swr';
+import { format } from 'date-fns';
+import { ArrowCounterClockwiseIcon, ArrowSquareOutIcon, CheckCircleIcon, CircleNotchIcon, HourglassIcon, KeyIcon, LockSimpleIcon, PlayIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Loader2, AlertCircle, Clock, CheckCircle } from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
+import { Skeleton } from '@/components/ui/skeleton';
+import { CanvasHtml } from '@/components/shared/canvas-html';
+import { ViewOnlyNote } from '@/components/shared/view-only-note';
+import { canvasErrorMessage, formatPoints } from '@/components/assignments/assignment-utils';
+import { refreshSubmissionCaches } from '@/components/assignments/refresh-caches';
+import { useQuiz } from '@/hooks/use-canvas';
+import { useAuth } from '@/lib/auth-context';
+import { CanvasApiError, canvasApi } from '@/lib/canvas-api';
+import type { QuizSubmissionQuestion } from '@/lib/types';
+import { QuizAttempt } from './quiz-attempt';
+import { quizPoints, type QuizAttemptSubmission, type QuizDetails } from './quiz-types';
 
 interface QuizEngineProps {
   courseId: number;
-  quiz: Quiz;
+  quizId: number;
   onComplete?: () => void;
 }
 
-export function QuizEngine({ courseId, quiz, onComplete }: QuizEngineProps) {
-  const [submission, setSubmission] = useState<QuizSubmission | null>(null);
-  const [questions, setQuestions] = useState<QuizQuestion[]>([]);
-  const [answers, setAnswers] = useState<Record<number, any>>({});
-  
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+interface ActiveAttempt {
+  submission: QuizAttemptSubmission;
+  questions: QuizSubmissionQuestion[];
+}
 
-  const startQuiz = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      // 1. Get Questions
-      const qs = await canvasApi.getQuizQuestions(courseId, quiz.id);
-      setQuestions(qs);
-      
-      // 2. Start Submission
-      const subRes = await canvasApi.startQuizSubmission(courseId, quiz.id);
-      
-      // The API often returns { quiz_submissions: [...] }
-      if (subRes.quiz_submissions && subRes.quiz_submissions.length > 0) {
-        setSubmission(subRes.quiz_submissions[0]);
-      } else {
-        setSubmission(subRes);
-      }
-    } catch (err: any) {
-      setError(err.message || 'Failed to start quiz');
-    } finally {
-      setLoading(false);
-    }
-  };
+const QUIZ_TYPE_LABELS: Record<string, string> = {
+  practice_quiz: 'Practice quiz',
+  survey: 'Ungraded survey',
+  graded_survey: 'Graded survey',
+};
 
-  const handleAnswerChange = (questionId: number, value: any) => {
-    setAnswers(prev => ({
-      ...prev,
-      [questionId]: value
-    }));
-  };
+function Fact({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</dt>
+      <dd className="mt-1 text-sm font-medium">{children}</dd>
+    </div>
+  );
+}
 
-  const submitQuiz = async () => {
-    if (!submission) return;
-    try {
-      setSubmitting(true);
-      setError(null);
+function OpenInCanvas({ href, label = 'Open in Canvas' }: { href: string; label?: string }) {
+  return (
+    <Button asChild variant="outline">
+      <a href={href} target="_blank" rel="noopener noreferrer">
+        <ArrowSquareOutIcon className="h-4 w-4" /> {label}
+      </a>
+    </Button>
+  );
+}
 
-      // format answers for Canvas
-      const formattedAnswers = Object.entries(answers).map(([qId, ans]) => ({
-        id: parseInt(qId),
-        answer: ans
-      }));
+function isFinished(qs: QuizAttemptSubmission | null | undefined): boolean {
+  return !!qs && (qs.workflow_state === 'complete' || qs.workflow_state === 'pending_review');
+}
 
-      await canvasApi.postQuizAnswers(
-        courseId, 
-        quiz.id, 
-        submission.id, 
-        submission.attempt, 
-        submission.validation_token, 
-        formattedAnswers
-      );
+/**
+ * Takes a classic Canvas quiz inside the dashboard: shows the quiz details,
+ * starts or resumes an attempt, and submits it. New Quizzes have no student
+ * API and are handled by the caller as external tools.
+ */
+export function QuizEngine({ courseId, quizId, onComplete }: QuizEngineProps) {
+  const { data, loading: quizLoading, error: quizError, refetch: refetchQuiz } = useQuiz(courseId, quizId);
+  const { isViewOnly } = useAuth();
+  const quiz = data as QuizDetails | undefined;
+  const latestKey = courseId && quizId ? `canvas_my_quiz_submission_${courseId}_${quizId}` : null;
+  const {
+    data: latest,
+    error: latestError,
+    isLoading: latestLoading,
+    mutate: refetchLatest,
+  } = useSWR<QuizAttemptSubmission | null>(
+    latestKey,
+    () => canvasApi.getMyQuizSubmission(courseId, quizId) as Promise<QuizAttemptSubmission | null>,
+    { revalidateOnFocus: false, dedupingInterval: 60_000, errorRetryCount: 1 }
+  );
 
-      setSubmitted(true);
-      if (onComplete) onComplete();
-    } catch (err: any) {
-      setError(err.message || 'Failed to submit quiz');
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  const [active, setActive] = useState<ActiveAttempt | null>(null);
+  const [result, setResult] = useState<QuizAttemptSubmission | null>(null);
+  const [accessCode, setAccessCode] = useState('');
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
-  // Intro Screen
-  if (!submission && !loading && !submitted) {
+  if (quizLoading || (latestLoading && !latest)) {
     return (
-      <Card className="border-2 border-primary/20">
+      <Card>
         <CardHeader>
-          <CardTitle>Quiz Details</CardTitle>
+          <Skeleton className="h-6 w-40" />
+          <Skeleton className="h-4 w-64" />
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div 
-            className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground"
-            dangerouslySetInnerHTML={{ __html: quiz.description }}
-          />
-          <div className="grid grid-cols-2 gap-4 text-sm bg-muted/50 p-4 rounded-md">
-            <div><strong>Questions:</strong> {quiz.question_count}</div>
-            <div><strong>Points:</strong> {quiz.point_value}</div>
-            {quiz.time_limit && (
-              <div className="flex items-center gap-1 col-span-2 text-orange-500 font-medium pt-2">
-                <Clock className="w-4 h-4" /> Time Limit: {quiz.time_limit} Minutes
-              </div>
-            )}
-          </div>
-          {error && <p className="text-destructive text-sm">{error}</p>}
+        <CardContent className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          {[0, 1, 2, 3].map(i => (
+            <Skeleton key={i} className="h-10 w-full" />
+          ))}
         </CardContent>
-        <CardFooter className="flex justify-end gap-2">
-          {quiz.quiz_type === 'practice_quiz' || quiz.quiz_type === 'assignment' ? (
-             <Button onClick={startQuiz}>Begin Quiz</Button>
-          ) : (
-            <p className="text-sm text-muted-foreground italic">
-              This quiz type ({quiz.quiz_type.replace(/_/g, ' ')}) cannot be taken here. Please open in Canvas.
-            </p>
-          )}
-        </CardFooter>
       </Card>
     );
   }
 
-  // Loading Screen
-  if (loading) {
+  if (quizError || !quiz) {
     return (
-      <div className="flex justify-center py-12">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
+      <Card>
+        <CardContent className="flex flex-col items-center gap-3 py-6 text-center">
+          <WarningCircleIcon className="h-8 w-8 text-muted-foreground" />
+          <div>
+            <p className="font-medium">This quiz couldn&apos;t be loaded</p>
+            <p className="text-sm text-muted-foreground">
+              {canvasErrorMessage(quizError, 'Canvas did not return the quiz details.')}
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => void refetchQuiz()}>
+            <ArrowCounterClockwiseIcon className="h-4 w-4" /> Try again
+          </Button>
+        </CardContent>
+      </Card>
     );
   }
 
-  // Submitted Screen
-  if (submitted) {
+  const handleFinished = (qs: QuizAttemptSubmission) => {
+    setActive(null);
+    setResult(qs);
+    void refetchLatest(qs, { revalidate: true });
+    void refreshSubmissionCaches(courseId);
+    onComplete?.();
+  };
+
+  if (active && !isViewOnly) {
     return (
-      <div className="flex flex-col items-center justify-center p-8 text-center space-y-4 bg-green-500/10 rounded-lg border border-green-500/20 text-green-700 dark:text-green-400">
-        <CheckCircle className="h-12 w-12" />
-        <h3 className="text-xl font-bold">Quiz Submitted!</h3>
-        <p>Your answers have been successfully recorded in Canvas.</p>
-      </div>
+      <QuizAttempt
+        courseId={courseId}
+        quiz={quiz}
+        submission={active.submission}
+        questions={active.questions}
+        accessCode={accessCode || undefined}
+        onFinished={handleFinished}
+        onExit={() => {
+          setActive(null);
+          void refetchLatest();
+        }}
+      />
     );
   }
 
-  // Actual Quiz Engine
-  return (
-    <div className="space-y-8 max-w-3xl mx-auto">
-      {quiz.time_limit && submission?.started_at && (
-        <div className="sticky top-0 z-10 bg-background/95 backdrop-blur py-3 border-b border-orange-500/20 flex justify-between items-center text-orange-500 font-medium">
-           <span className="flex items-center gap-2">
-             <Clock className="w-4 h-4" /> Started {formatDistanceToNow(new Date(submission.started_at), { addSuffix: true })}
-           </span>
-           <span>Time Limit: {quiz.time_limit} mins</span>
-        </div>
-      )}
+  const points = quizPoints(quiz);
 
-      {error && (
-        <div className="p-4 bg-destructive/10 text-destructive rounded-md flex items-center gap-2">
-          <AlertCircle className="w-5 h-5 shrink-0" />
-          <p>{error}</p>
-        </div>
-      )}
-
-      <div className="space-y-6">
-        {questions.map((q, idx) => (
-          <Card key={q.id}>
-            <CardHeader className="pb-3 border-b bg-muted/20">
-              <div className="flex justify-between items-start">
-                 <span className="font-semibold text-sm text-muted-foreground">Question {idx + 1}</span>
-                 <span className="text-xs font-medium text-muted-foreground">{q.points_possible} pts</span>
-              </div>
-              <CardTitle className="text-lg mt-2">
-                <div dangerouslySetInnerHTML={{ __html: q.question_text }} className="prose prose-sm dark:prose-invert max-w-none" />
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-6">
-              {q.question_type === 'multiple_choice_question' || q.question_type === 'true_false_question' ? (
-                <RadioGroup 
-                  onValueChange={(val: string) => handleAnswerChange(q.id, val)}
-                  value={answers[q.id]?.toString()}
-                  className="space-y-3"
-                >
-                  {q.answers.map(ans => (
-                    <div className="flex items-center gap-2 bg-muted/30 p-3 rounded-md border border-border/50 hover:bg-muted/50 transition-colors" key={ans.id}>
-                      <RadioGroupItem value={ans.id.toString()} id={`ans-${ans.id}`} />
-                      <Label htmlFor={`ans-${ans.id}`} className="cursor-pointer flex-1 font-normal leading-relaxed">
-                         <div dangerouslySetInnerHTML={{ __html: ans.html || ans.text }} />
-                      </Label>
-                    </div>
-                  ))}
-                </RadioGroup>
-              ) : q.question_type === 'essay_question' || q.question_type === 'short_answer_question' ? (
-                <textarea
-                  className="w-full min-h-[150px] p-3 text-sm bg-background border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/50"
-                  placeholder="Type your answer here..."
-                  value={answers[q.id] || ''}
-                  onChange={(e) => handleAnswerChange(q.id, e.target.value)}
-                />
-              ) : (
-                <div className="p-4 bg-yellow-500/10 text-yellow-700 dark:text-yellow-500 rounded-md text-sm border border-yellow-500/20">
-                  ⚠️ This question type ({q.question_type}) is not fully supported natively yet. 
-                  You may need to answer this on the main Canvas website.
-                </div>
+  if (result) {
+    const graded = result.workflow_state === 'complete';
+    const score = result.score;
+    const kept = result.kept_score;
+    const hidden = quiz.hide_results === 'always';
+    return (
+      <Card className="border-green-500/30">
+        <CardContent className="flex flex-col items-center gap-4 py-4 text-center">
+          <CheckCircleIcon className="h-12 w-12 text-green-600 dark:text-green-400" />
+          <div className="space-y-1">
+            <h3 className="text-xl font-semibold">Quiz submitted</h3>
+            <p className="text-sm text-muted-foreground">
+              Attempt {result.attempt}
+              {result.finished_at && ` · ${format(new Date(result.finished_at), "MMM d, yyyy 'at' h:mm a")}`}
+            </p>
+          </div>
+          {!hidden && graded && score !== null && score !== undefined && (
+            <div className="rounded-lg bg-muted/50 px-6 py-3">
+              <p className="text-3xl font-bold tabular-nums">
+                {formatPoints(score)}
+                {points !== null && <span className="text-lg font-medium text-muted-foreground"> / {formatPoints(points)}</span>}
+              </p>
+              {kept !== null && kept !== undefined && kept !== score && (
+                <p className="text-sm text-muted-foreground">Kept score: {formatPoints(kept)}</p>
               )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      <div className="flex justify-end pt-4 border-t sticky bottom-0 bg-background/95 backdrop-blur pb-4">
-        <Button size="lg" onClick={submitQuiz} disabled={submitting}>
-          {submitting ? (
-             <><Loader2 className="w-5 h-5 mr-2 animate-spin" /> Submitting...</>
-          ) : (
-             'Submit Quiz'
+            </div>
           )}
-        </Button>
+          {result.workflow_state === 'pending_review' && (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <HourglassIcon className="h-4 w-4" /> Some answers need to be graded by your instructor.
+            </p>
+          )}
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <OpenInCanvas href={quiz.html_url} label="See results on Canvas" />
+            <Button variant="ghost" onClick={() => setResult(null)}>
+              Back to quiz details
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // ---- Intro / details screen ----
+  const inProgress = latest?.workflow_state === 'untaken' ? latest : null;
+  const lastFinished = latest && isFinished(latest) ? latest : null;
+  const allowedAttempts = quiz.allowed_attempts && quiz.allowed_attempts > 0 ? quiz.allowed_attempts : null;
+  const usedAttempts = lastFinished ? lastFinished.attempt : inProgress ? inProgress.attempt - 1 : 0;
+  const extra = latest?.extra_attempts ?? 0;
+  const noAttemptsLeft =
+    !inProgress &&
+    (latest?.attempts_left === 0 || (allowedAttempts !== null && usedAttempts >= allowedAttempts + extra));
+  const needsLockdown = !!quiz.require_lockdown_browser;
+  const typeLabel = QUIZ_TYPE_LABELS[quiz.quiz_type];
+
+  const begin = async (event?: FormEvent) => {
+    event?.preventDefault();
+    if (starting || isViewOnly) return;
+    if (quiz.has_access_code && !accessCode.trim()) {
+      setStartError('Enter the access code your instructor gave you.');
+      return;
+    }
+    setStarting(true);
+    setStartError(null);
+    const code = quiz.has_access_code ? accessCode.trim() : undefined;
+    try {
+      let qs: QuizAttemptSubmission | null = inProgress;
+      if (!qs) {
+        try {
+          qs = await canvasApi.startQuizSubmission(courseId, quizId, code);
+        } catch (err) {
+          // 409: an attempt is already in progress, so pick that one up instead.
+          if (!(err instanceof CanvasApiError && err.status === 409)) throw err;
+          const current = (await canvasApi.getMyQuizSubmission(courseId, quizId)) as QuizAttemptSubmission | null;
+          if (!current || current.workflow_state !== 'untaken') throw err;
+          qs = current;
+        }
+      }
+      if (!qs.validation_token) {
+        throw new Error("Canvas didn't return a session token for this attempt. Continue it in Canvas instead.");
+      }
+      const questions = await canvasApi.getQuizSubmissionQuestions(qs.id);
+      setActive({ submission: qs, questions });
+      void refetchLatest(qs, { revalidate: false });
+    } catch (err) {
+      setStartError(canvasErrorMessage(err, 'The quiz could not be started.'));
+      void refetchLatest(); // the attempt may have ended elsewhere (e.g. time ran out)
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  let blocker: ReactNode = null;
+  if (quiz.locked_for_user) {
+    blocker = (
+      <div className="flex items-start gap-3 rounded-md border bg-muted/40 p-3 text-sm">
+        <LockSimpleIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+        <div className="min-w-0">
+          <p className="font-medium">This quiz is locked</p>
+          {quiz.lock_explanation ? (
+            <CanvasHtml html={quiz.lock_explanation} className="text-muted-foreground" />
+          ) : (
+            <p className="text-muted-foreground">It isn&apos;t available right now.</p>
+          )}
+        </div>
       </div>
-    </div>
+    );
+  } else if (needsLockdown) {
+    blocker = (
+      <div className="flex items-start gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-300">
+        <LockSimpleIcon className="mt-0.5 h-4 w-4 shrink-0" />
+        <p>This quiz requires a lockdown browser, so it has to be taken in Canvas.</p>
+      </div>
+    );
+  } else if (noAttemptsLeft) {
+    blocker = (
+      <div className="flex items-start gap-3 rounded-md border bg-muted/40 p-3 text-sm">
+        <CheckCircleIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+        <p>You&apos;ve used all your attempts for this quiz.</p>
+      </div>
+    );
+  }
+
+  const startLabel = inProgress ? 'Resume quiz' : lastFinished ? 'Retake quiz' : 'Start quiz';
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex flex-wrap items-center gap-2 text-lg">
+          {quiz.title || 'Quiz'}
+          {typeLabel && <Badge variant="secondary">{typeLabel}</Badge>}
+        </CardTitle>
+        <CardDescription>
+          {inProgress
+            ? `You have an attempt in progress (started ${format(new Date(inProgress.started_at), "MMM d 'at' h:mm a")}).`
+            : 'Take this quiz right here. Your answers are saved to Canvas as you go.'}
+          {quiz.time_limit && !inProgress ? ' The timer starts when you begin and keeps running if you leave.' : ''}
+        </CardDescription>
+      </CardHeader>
+
+      <CardContent className="space-y-4">
+        <dl className="grid grid-cols-2 gap-4 rounded-lg bg-muted/40 p-4 sm:grid-cols-4">
+          <Fact label="Questions">{quiz.question_count ?? '–'}</Fact>
+          <Fact label="Points">{points !== null ? formatPoints(points) : '–'}</Fact>
+          <Fact label="Time limit">{quiz.time_limit ? `${quiz.time_limit} min` : 'None'}</Fact>
+          <Fact label="Attempts">
+            {allowedAttempts === null ? (
+              <>
+                {usedAttempts > 0 ? `${usedAttempts} used` : 'Unlimited'}
+                {usedAttempts > 0 && <span className="text-muted-foreground"> · unlimited</span>}
+              </>
+            ) : (
+              <>
+                {usedAttempts} of {allowedAttempts + extra} used
+              </>
+            )}
+          </Fact>
+        </dl>
+
+        {lastFinished && (
+          <div className="flex flex-col gap-2 rounded-lg border p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-medium">
+                Last attempt ({lastFinished.attempt})
+                {lastFinished.workflow_state === 'complete' &&
+                  lastFinished.score !== null &&
+                  lastFinished.score !== undefined &&
+                  quiz.hide_results !== 'always' && (
+                    <>
+                      : {formatPoints(lastFinished.score)}
+                      {points !== null && ` / ${formatPoints(points)}`}
+                    </>
+                  )}
+              </p>
+              <p className="text-muted-foreground">
+                {lastFinished.finished_at && `Submitted ${format(new Date(lastFinished.finished_at), "MMM d, yyyy 'at' h:mm a")}`}
+                {lastFinished.workflow_state === 'pending_review' && ' · waiting for manual grading'}
+                {lastFinished.kept_score !== null &&
+                  lastFinished.kept_score !== undefined &&
+                  lastFinished.kept_score !== lastFinished.score &&
+                  ` · kept score ${formatPoints(lastFinished.kept_score)}`}
+              </p>
+            </div>
+            <a
+              href={quiz.html_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex shrink-0 items-center gap-1.5 font-medium text-primary underline-offset-4 hover:underline"
+            >
+              View results <ArrowSquareOutIcon className="h-3.5 w-3.5" />
+            </a>
+          </div>
+        )}
+
+        {latestError && (
+          <p className="text-sm text-muted-foreground">
+            Your previous attempts couldn&apos;t be loaded ({canvasErrorMessage(latestError)}).
+          </p>
+        )}
+
+        {blocker}
+
+        {!blocker && isViewOnly && <ViewOnlyNote>View only: taking quizzes is turned off.</ViewOnlyNote>}
+
+        {!blocker && !isViewOnly && quiz.has_access_code && (
+          <form onSubmit={begin} className="max-w-sm space-y-1.5">
+            <Label htmlFor={`access-code-${quiz.id}`} className="flex items-center gap-1.5">
+              <KeyIcon className="h-4 w-4" /> Access code
+            </Label>
+            <Input
+              id={`access-code-${quiz.id}`}
+              value={accessCode}
+              onChange={e => setAccessCode(e.target.value)}
+              autoComplete="off"
+              placeholder="Enter the code from your instructor"
+            />
+          </form>
+        )}
+
+        {startError && (
+          <div className="flex items-start gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+            <WarningCircleIcon className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>{startError}</p>
+          </div>
+        )}
+      </CardContent>
+
+      <CardFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <OpenInCanvas href={quiz.html_url} />
+        {!blocker && !isViewOnly && (
+          <Button onClick={() => void begin()} disabled={starting}>
+            {starting ? (
+              <CircleNotchIcon className="h-4 w-4 animate-spin" />
+            ) : lastFinished && !inProgress ? (
+              <ArrowCounterClockwiseIcon className="h-4 w-4" />
+            ) : (
+              <PlayIcon className="h-4 w-4" />
+            )}
+            {starting ? 'Loading questions…' : startLabel}
+          </Button>
+        )}
+      </CardFooter>
+    </Card>
   );
 }

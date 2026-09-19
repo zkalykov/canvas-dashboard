@@ -1,142 +1,129 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { decryptPayload } from '@/lib/session';
+import {
+  canvasApiUrl,
+  canvasServerFetch,
+  isSameOriginRequest,
+  requireCanvasSession,
+  rewriteLinkHeader,
+} from '@/lib/canvas-server';
 
-const ENV_CANVAS_BASE_URL = process.env.CANVAS_BASE_URL || process.env.NEXT_PUBLIC_CANVAS_BASE_URL || '';
-const ENV_CANVAS_API_TOKEN = process.env.CANVAS_API_TOKEN || process.env.NEXT_PUBLIC_CANVAS_API_TOKEN || '';
+type RouteContext = { params: Promise<{ path: string[] }> };
 
-async function proxyRequest(
-  request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> }
-) {
+/**
+ * Canvas endpoints this site never needs and no session may reach: they hand out a
+ * full Canvas web login (login/session_token) or manage API tokens.
+ */
+const BLOCKED_PATHS = [/^\/login(\/|$)/, /^\/users\/[^/]+\/tokens(\/|$)/];
+
+async function proxyRequest(request: NextRequest, { params }: RouteContext) {
   const { path } = await params;
   const method = request.method;
-  const endpoint = '/' + path.join('/');
-
-  // 1. Try to get credentials from the secure cookie first
-  let canvasBaseUrl = '';
-  let canvasApiToken = '';
-
-  if (process.env.APP_STATUS === 'test') {
-    canvasBaseUrl = ENV_CANVAS_BASE_URL;
-    canvasApiToken = ENV_CANVAS_API_TOKEN;
-  } else {
-    try {
-      const cookieStore = await cookies();
-      const sessionCookie = cookieStore.get('portal_session');
-      
-      if (sessionCookie?.value) {
-        const decoded = decryptPayload(sessionCookie.value);
-        if (decoded) {
-          const session = JSON.parse(decoded);
-          if (session.canvas_url && session.canvas_token) {
-            canvasBaseUrl = session.canvas_url;
-            canvasApiToken = session.canvas_token;
-          }
-        }
-      }
-    } catch (e) {
-      console.error('[Canvas Proxy] Error decoding session cookie', e);
-    }
-
-    // Fallback to headers (for legacy compatibility if needed)
-    canvasBaseUrl = request.headers.get('x-canvas-base-url') || canvasBaseUrl;
-    canvasApiToken = request.headers.get('x-canvas-api-token') || canvasApiToken;
+  if (path.some(segment => segment === '..' || segment === '.' || segment === '')) {
+    return NextResponse.json({ error: 'Invalid path' }, { status: 400 });
+  }
+  // Canvas accepts a ".json" suffix; drop it so the path rules below always see the plain path.
+  const segments = [...path];
+  segments[segments.length - 1] = segments[segments.length - 1].replace(/\.json$/i, '');
+  const endpoint = '/' + segments.map(encodeURIComponent).join('/');
+  if (BLOCKED_PATHS.some(rule => rule.test(endpoint))) {
+    return NextResponse.json({ error: 'Not available through this site' }, { status: 403 });
+  }
+  if (method !== 'GET' && method !== 'HEAD' && !isSameOriginRequest(request)) {
+    return NextResponse.json({ error: 'Cross-site request refused' }, { status: 403 });
   }
 
-  if (!canvasBaseUrl || !canvasApiToken) {
+  const session = await requireCanvasSession();
+  if (session.error) return session.error;
+  const { creds } = session;
+
+  // View-only sessions (approved as "View only" in Telegram) can read but never change anything.
+  if (creds.access === 'view' && method !== 'GET' && method !== 'HEAD') {
     return NextResponse.json(
-      { error: 'Canvas API credentials not configured. Please authenticate.' },
-      { status: 401 }
+      { error: 'This session is view only. Log in with full access to submit or change things.' },
+      { status: 403 }
     );
   }
-  
-  if (!canvasBaseUrl.startsWith('http://') && !canvasBaseUrl.startsWith('https://')) {
-    canvasBaseUrl = `https://${canvasBaseUrl}`;
-  }
-  
-  // Forward all query parameters
-  const searchParams = request.nextUrl.searchParams.toString();
-  const normalizedBaseUrl = canvasBaseUrl.replace(/\/$/, '');
-  const url = `${normalizedBaseUrl}/api/v1${endpoint}${searchParams ? `?${searchParams}` : ''}`;
 
-  console.log(`[Canvas Proxy] ${method} ${url}`);
+  const query = new URLSearchParams(request.nextUrl.searchParams);
+  // Reading a conversation normally marks it read in Canvas; a view-only session changes nothing.
+  if (creds.access === 'view' && /^\/conversations\/\d+$/.test(endpoint)) query.set('auto_mark_as_read', 'false');
+  const searchParams = query.toString();
+  const url = canvasApiUrl(creds, endpoint, searchParams);
 
   const headers = new Headers();
-  headers.set('Authorization', `Bearer ${canvasApiToken}`);
-  
   const contentType = request.headers.get('content-type') || '';
-
-  const init: RequestInit = {
-    method,
-    headers,
-  };
+  const init: RequestInit = { method, headers };
 
   if (method !== 'GET' && method !== 'HEAD') {
-    if (contentType.includes('application/json')) {
-      // JSON body
-      headers.set('Content-Type', 'application/json');
-      const text = await request.text();
-      if (text) {
-        init.body = text;
-      }
-    } else if (contentType.includes('multipart/form-data') || contentType.includes('application/x-www-form-urlencoded')) {
-      // Form data
-      const formData = await request.formData();
-      init.body = formData;
-      // DO NOT set Content-Type header manually here for multipart!
-      // `fetch` will automatically set the correct boundary for multipart/form-data.
+    if (contentType.includes('multipart/form-data') || contentType.includes('application/x-www-form-urlencoded')) {
+      // Let fetch set the multipart boundary itself.
+      init.body = await request.formData();
     } else {
-      // Plain text or other
-      if (contentType) headers.set('Content-Type', contentType);
+      if (contentType) headers.set('Content-Type', contentType.includes('application/json') ? 'application/json' : contentType);
       const text = await request.text();
       if (text) init.body = text;
     }
   }
 
   try {
-    const response = await fetch(url, init);
+    const response = await canvasServerFetch(creds, url, init);
 
+    if (response.status >= 300 && response.status < 400) {
+      // Only redirects within the Canvas site are followed (see canvasServerFetch).
+      return NextResponse.json({ error: 'Canvas redirected to another site' }, { status: 502 });
+    }
     if (!response.ok) {
-      console.error('[Canvas Proxy] Error:', response.status, response.statusText);
       const errorText = await response.text();
-      console.error('[Canvas Proxy] Response:', errorText);
+      console.error(`[Canvas Proxy] ${method} ${endpoint} -> ${response.status}`);
       return NextResponse.json(
-        { error: `Canvas API error: ${response.status}`, details: errorText },
+        { error: `Canvas API error: ${response.status}`, details: errorText.slice(0, 2000) },
         { status: response.status }
       );
     }
 
-    // Sometimes Canvas returns empty responses (e.g. 204 No Content for DELETE)
+    const outHeaders = new Headers();
+    const link = rewriteLinkHeader(response.headers.get('link'));
+    if (link) outHeaders.set('Link', link);
+    const cost = response.headers.get('x-request-cost');
+    if (cost) outHeaders.set('X-Request-Cost', cost);
+
+    if (response.status === 204) {
+      return new NextResponse(null, { status: 204, headers: outHeaders });
+    }
+
     const responseContentType = response.headers.get('content-type') || '';
     if (responseContentType.includes('application/json')) {
-      const data = await response.json();
-      return NextResponse.json(data);
-    } else {
       const text = await response.text();
-      return new NextResponse(text, { status: response.status, headers: { 'Content-Type': responseContentType } });
+      // Canvas may prefix JSON with "while(1);" as CSRF protection.
+      const cleaned = text.startsWith('while(1);') ? text.slice('while(1);'.length) : text;
+      outHeaders.set('Content-Type', 'application/json; charset=utf-8');
+      return new NextResponse(cleaned || 'null', { status: response.status, headers: outHeaders });
     }
+
+    const text = await response.text();
+    if (responseContentType) outHeaders.set('Content-Type', responseContentType);
+    return new NextResponse(text, { status: response.status, headers: outHeaders });
   } catch (error) {
-    console.error(`[Canvas Proxy] ${method} error:`, error);
+    console.error(`[Canvas Proxy] ${method} ${endpoint} failed:`, error);
     return NextResponse.json(
-      { error: 'Failed to proxy request to Canvas API', details: String(error) },
-      { status: 500 }
+      { error: 'Failed to reach Canvas', details: String(error) },
+      { status: 502 }
     );
   }
 }
 
-export async function GET(request: NextRequest, props: { params: Promise<{ path: string[] }> }) {
-  return proxyRequest(request, props);
+export async function GET(request: NextRequest, context: RouteContext) {
+  return proxyRequest(request, context);
 }
 
-export async function POST(request: NextRequest, props: { params: Promise<{ path: string[] }> }) {
-  return proxyRequest(request, props);
+export async function POST(request: NextRequest, context: RouteContext) {
+  return proxyRequest(request, context);
 }
 
-export async function PUT(request: NextRequest, props: { params: Promise<{ path: string[] }> }) {
-  return proxyRequest(request, props);
+export async function PUT(request: NextRequest, context: RouteContext) {
+  return proxyRequest(request, context);
 }
 
-export async function DELETE(request: NextRequest, props: { params: Promise<{ path: string[] }> }) {
-  return proxyRequest(request, props);
+export async function DELETE(request: NextRequest, context: RouteContext) {
+  return proxyRequest(request, context);
 }

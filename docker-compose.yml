@@ -1,16 +1,12 @@
-version: '3.8'
-
 services:
   canvas-dashboard:
     build:
       context: .
-      dockerfile: Dockerfile
+      args:
+        # Read when the landing page is built (see Dockerfile).
+        MANUAL_MODE: ${MANUAL_MODE:-0}
     ports:
       - "3000:3000"
-    environment:
-      - NODE_ENV=production
-      # - NEXT_TELEMETRY_DISABLED=1
-    # Once you have a .env file, you can pass them into the container easily:
-    # env_file:
-    #   - .env.local
+    env_file:
+      - .env
     restart: unless-stopped

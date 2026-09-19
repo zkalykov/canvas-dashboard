@@ -1,13 +1,9 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/providers";
 import { MainLayout } from "@/components/layout/main-layout";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
+import { SITE_DESCRIPTION, SITE_NAME, SITE_TITLE, siteUrl } from "@/lib/site";
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
@@ -15,8 +11,24 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Canvas Dashboard",
-  description: "A unified dashboard for Canvas LMS",
+  metadataBase: new URL(siteUrl()),
+  title: { default: SITE_TITLE, template: `%s | ${SITE_NAME}` },
+  description: SITE_DESCRIPTION,
+  applicationName: SITE_NAME,
+  keywords: [
+    "Canvas LMS",
+    "Canvas dashboard",
+    "Canvas student app",
+    "Instructure Canvas",
+    "student dashboard",
+    "assignments and grades",
+    "Canvas grade calculator",
+    "open source",
+  ],
+  openGraph: { type: "website", siteName: SITE_NAME, title: SITE_TITLE, description: SITE_DESCRIPTION, url: "/home" },
+  twitter: { card: "summary_large_image", title: SITE_TITLE, description: SITE_DESCRIPTION },
+  // Only the public landing page (/home) is indexed; the rest needs a login.
+  robots: { index: false, follow: true },
 };
 
 export default function RootLayout({
@@ -27,7 +39,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistMono.variable} antialiased`}
       >
         <Providers>
           <MainLayout>{children}</MainLayout>
